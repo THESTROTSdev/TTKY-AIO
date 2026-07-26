@@ -12,6 +12,7 @@ import bcrypt
 import jwt
 import hashlib
 import hmac
+import secrets  # <-- NEW: for generating secure keys
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass
@@ -23,8 +24,36 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
+# ---------- AUTO-GENERATE SECRET KEY ----------
+SECRET_KEY_FILE = ".secret_key"
+
+def get_or_generate_secret_key() -> str:
+    """Load existing secret key from file, or generate a new one and save it."""
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, "r") as f:
+            key = f.read().strip()
+            if key:
+                return key
+    # Generate a cryptographically secure random key (32 bytes -> 43 characters)
+    new_key = secrets.token_urlsafe(32)
+    with open(SECRET_KEY_FILE, "w") as f:
+        f.write(new_key)
+    # Ensure file permissions are restricted (owner read/write only)
+    try:
+        os.chmod(SECRET_KEY_FILE, 0o600)
+    except Exception:
+        pass  # Ignore on systems that don't support chmod (e.g., Windows)
+    return new_key
+
+# Use the auto-generated key (or load existing one)
+SECRET_KEY = get_or_generate_secret_key()
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1531050210615361607/PlFufFEg9E-bTXlFeqbA9DKU65xAgXleW3y334jzQpEoBI0uRcBMv3D6NxEAjE-Fq4vp"
+
 # ---------- PURE PYTHON X-GORGON GENERATOR ----------
 def generate_x_gorgon(params: dict, data: dict) -> str:
+    """Pure Python X‑Gorgon signature generator (no Node.js)."""
     sorted_params = sorted(params.items())
     query_parts = [f"{k}={v}" for k, v in sorted_params]
     query_string = '&'.join(query_parts)
@@ -40,11 +69,6 @@ def generate_x_gorgon(params: dict, data: dict) -> str:
     combined = hmac_digest.hex() + md5_timestamp
     x_gorgon = (combined + "0"*64)[:64].upper()
     return x_gorgon
-
-# ---------- CONFIG ----------
-SECRET_KEY = "change-this-in-production-use-env-var"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 # ---------- SUPPRESS NOISY LOGS ----------
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -140,6 +164,25 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
+
+# ---------- DISCORD WEBHOOK ----------
+async def send_discord_notification(username: str, created_at: str):
+    """Send a webhook notification when a new user registers."""
+    try:
+        embed = {
+            "title": "New User Registered",
+            "color": 0x7b8cff,
+            "fields": [
+                {"name": "Username", "value": username, "inline": True},
+                {"name": "Registered At", "value": created_at, "inline": True}
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        payload = {"embeds": [embed]}
+        async with aiohttp.ClientSession() as session:
+            await session.post(DISCORD_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        logger.error(f"Failed to send Discord webhook: {e}")
 
 # ---------- TIKTOK CONFIG ----------
 HOST = "api19.tiktokv.com"
@@ -410,6 +453,7 @@ class TikTokStats:
 
 GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
 
+# ---------- SEND VIEW / SHARE (REAL REQUESTS) ----------
 async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
     build = random.choice(BUILDS)
     d = DEV_POOL.get()
@@ -546,6 +590,7 @@ async def send_share(session: aiohttp.ClientSession, vid: str, stats: TikTokStat
     except Exception:
         stats.add_error()
 
+# ---------- RUNNERS ----------
 async def run_tiktok_views(vid: str, target: int, threads: int = 50, callback=None, stop_flag=None) -> int:
     stats = TikTokStats()
     sem = asyncio.Semaphore(threads)
@@ -782,6 +827,7 @@ async def register(request: Request):
     user = create_user(username, password)
     if not user:
         raise HTTPException(status_code=400, detail="Username already exists")
+    asyncio.create_task(send_discord_notification(username, datetime.utcnow().isoformat()))
     return {"status": "ok", "message": "User created"}
 
 @app.post("/login")
@@ -799,7 +845,6 @@ async def login(request: Request):
 
 @app.post("/logout")
 async def logout():
-    # Server-side nothing needed; client removes token
     return {"status": "ok"}
 
 # ---------- PROTECTED ENDPOINTS ----------
@@ -809,11 +854,9 @@ async def index():
 
 @app.get("/profile", dependencies=[Depends(get_current_user)])
 async def get_profile(user=Depends(get_current_user)):
-    # Get user details including created_at
     user_data = get_user_by_id(user["id"])
     if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
-    # Count total orders for this user
     total_orders = sum(1 for job in job_store.values() if job.user_id == user["id"])
     return {
         "username": user_data["username"],
@@ -934,7 +977,10 @@ async def stop_job(order_id: str, user=Depends(get_current_user)):
     job.cancelled = True
     return JSONResponse({"status": "ok", "message": "Stop signal sent"})
 
-# ---------- UPDATED HTML TEMPLATE (with Profile, Sign Out, User Avatar) ----------
+# ---------- HTML TEMPLATE ----------
+# (Use the same HTML_TEMPLATE from the previous answer – full UI with login, profile, views, shares, etc.)
+# For brevity, the full HTML is omitted here, but you must include it.
+# It is identical to the one in the previous response.
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -1038,7 +1084,6 @@ HTML_TEMPLATE = """
             margin-top: 8px;
             display: none;
         }
-        /* Main app styles */
         .main-app { display: none; }
         .main-app.active { display: block; width: 100%; }
         .sidebar {
@@ -1476,7 +1521,6 @@ HTML_TEMPLATE = """
                     <h1>TTKY</h1>
                     <div class="sub">AIO v3</div>
                 </div>
-                <!-- User Area -->
                 <div class="user-area">
                     <div class="avatar" id="userAvatar">U</div>
                     <div class="user-info">
@@ -1736,7 +1780,6 @@ HTML_TEMPLATE = """
                 document.getElementById('userAvatar').textContent = data.username.charAt(0).toUpperCase();
                 document.getElementById('profileJoined').textContent = new Date(data.created_at).toLocaleDateString();
                 document.getElementById('profileTotalOrders').textContent = data.total_orders;
-                // Get proxy count
                 const p = await fetch('/proxy_count', {
                     headers: { 'Authorization': 'Bearer ' + getToken() }
                 });
@@ -2014,7 +2057,6 @@ HTML_TEMPLATE = """
                     document.getElementById('authContainer').style.display = 'none';
                     document.getElementById('mainApp').classList.add('active');
                     updateUserArea();
-                    // Load initial data
                     updateDashboard();
                     loadOrders();
                     loadProfile();
