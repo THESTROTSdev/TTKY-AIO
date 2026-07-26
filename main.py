@@ -10,9 +10,7 @@ import sqlite3
 import json
 import bcrypt
 import jwt
-import hashlib
-import hmac
-import secrets  # <-- NEW: for generating secure keys
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from dataclasses import dataclass
@@ -28,47 +26,24 @@ import uvicorn
 SECRET_KEY_FILE = ".secret_key"
 
 def get_or_generate_secret_key() -> str:
-    """Load existing secret key from file, or generate a new one and save it."""
     if os.path.exists(SECRET_KEY_FILE):
         with open(SECRET_KEY_FILE, "r") as f:
             key = f.read().strip()
             if key:
                 return key
-    # Generate a cryptographically secure random key (32 bytes -> 43 characters)
     new_key = secrets.token_urlsafe(32)
     with open(SECRET_KEY_FILE, "w") as f:
         f.write(new_key)
-    # Ensure file permissions are restricted (owner read/write only)
     try:
         os.chmod(SECRET_KEY_FILE, 0o600)
     except Exception:
-        pass  # Ignore on systems that don't support chmod (e.g., Windows)
+        pass
     return new_key
 
-# Use the auto-generated key (or load existing one)
 SECRET_KEY = get_or_generate_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1531050210615361607/PlFufFEg9E-bTXlFeqbA9DKU65xAgXleW3y334jzQpEoBI0uRcBMv3D6NxEAjE-Fq4vp"
-
-# ---------- PURE PYTHON X-GORGON GENERATOR ----------
-def generate_x_gorgon(params: dict, data: dict) -> str:
-    """Pure Python X‑Gorgon signature generator (no Node.js)."""
-    sorted_params = sorted(params.items())
-    query_parts = [f"{k}={v}" for k, v in sorted_params]
-    query_string = '&'.join(query_parts)
-    sorted_data = sorted(data.items())
-    body_parts = [f"{k}={v}" for k, v in sorted_data]
-    body_string = '&'.join(body_parts)
-    path = "/aweme/v1/aweme/stats"
-    khronos = str(int(time.time()))
-    sign_str = path + '?' + query_string + body_string + khronos
-    key = "0123456789ABCDEF"
-    hmac_digest = hmac.new(key.encode(), sign_str.encode(), hashlib.sha1).digest()
-    md5_timestamp = hashlib.md5(khronos.encode()).hexdigest()
-    combined = hmac_digest.hex() + md5_timestamp
-    x_gorgon = (combined + "0"*64)[:64].upper()
-    return x_gorgon
 
 # ---------- SUPPRESS NOISY LOGS ----------
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -167,7 +142,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 # ---------- DISCORD WEBHOOK ----------
 async def send_discord_notification(username: str, created_at: str):
-    """Send a webhook notification when a new user registers."""
     try:
         embed = {
             "title": "New User Registered",
@@ -186,10 +160,9 @@ async def send_discord_notification(username: str, created_at: str):
 
 # ---------- TIKTOK CONFIG ----------
 HOST = "api19.tiktokv.com"
-DEADLINE = 3
+DEADLINE = 2
 REFRESHRATE = 0.20
 MAX_THREADS = 100
-GLOBAL_MAX_CONCURRENT = 200
 BUILDS = [247, 312, 322, 357, 358, 415, 422, 444, 466]
 MAX_AMOUNT = 250
 ORDER_PREFIX = "TTKY"
@@ -251,7 +224,7 @@ class ProxyManager:
 
 PROXY_MANAGER = ProxyManager()
 
-# ---------- DEVICE MODELS ----------
+# ---------- DEVICE MODELS (as in working script) ----------
 @dataclass
 class DeviceModel:
     model: str
@@ -451,75 +424,42 @@ class TikTokStats:
     def add_error(self):
         with self.lock: self.error += 1
 
-GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
-
-# ---------- SEND VIEW / SHARE (REAL REQUESTS) ----------
+# ---------- WORKING VIEW/SHARE FUNCTIONS (from the script) ----------
 async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
     build = random.choice(BUILDS)
     d = DEV_POOL.get()
     osv = str(random.randint(5, 12))
     params = {
-        "app_language": "fr",
-        "iid": d["iid"],
-        "device_id": d["device_id"],
-        "channel": d["channel"],
-        "device_type": d["device_type"],
-        "ac": "wifi",
-        "os_version": osv,
-        "version_code": str(build),
-        "app_name": d["app_name"],
-        "device_brand": d["device_brand"],
-        "ssmix": "a",
-        "device_platform": "android",
-        "aid": "1180",
-        "as": "a1iosdfgh",
-        "cp": "androide1",
+        "app_language": "fr", "iid": d["iid"], "device_id": d["device_id"],
+        "channel": d["channel"], "device_type": d["device_type"], "ac": "wifi",
+        "os_version": osv, "version_code": str(build), "app_name": d["app_name"],
+        "device_brand": d["device_brand"], "ssmix": "a", "device_platform": "android",
+        "aid": "1180", "as": "a1iosdfgh", "cp": "androide1",
     }
-    data_payload = {
-        "manifest_version_code": str(build),
-        "update_version_code": str(build) + "0",
-        "play_delta": "1",
-        "item_id": vid,
-        "version_code": str(build),
-        "aweme_type": "0",
-    }
-    x_gorgon = generate_x_gorgon(params, data_payload)
-    khronos = str(int(time.time()))
     headers = {
-        "Host": HOST,
-        "Connection": "keep-alive",
-        "Accept-Encoding": "gzip",
+        "Host": HOST, "Connection": "keep-alive", "Accept-Encoding": "gzip",
         "X-SS-REQ-TICKET": str(int(time.time() * 1000)),
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "User-Agent": d["user_agent"],
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "application/json",
-        "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
-        "X-Khronos": khronos,
-        "X-Gorgon": x_gorgon,
+    }
+    data = {
+        "manifest_version_code": str(build), "update_version_code": str(build) + "0",
+        "play_delta": "1", "item_id": vid, "version_code": str(build), "aweme_type": "0",
     }
     url = f"https://{HOST}/aweme/v1/aweme/stats"
     proxy_url = PROXY_MANAGER.get_proxy_url(proxy) if proxy else None
     try:
-        async with GLOBAL_SEM:
-            async with session.post(url, params=params, data=data_payload, headers=headers,
-                                    timeout=aiohttp.ClientTimeout(total=DEADLINE),
-                                    proxy=proxy_url) as resp:
-                text = await resp.text()
-                if resp.status == 200:
-                    try:
-                        json_resp = json.loads(text)
-                        if json_resp.get("status_code") == 0:
-                            stats.add_sent()
-                        else:
-                            stats.add_fail()
-                    except:
-                        stats.add_sent()
-                else:
-                    stats.add_fail()
+        async with session.post(url, params=params, data=data, headers=headers,
+                                timeout=aiohttp.ClientTimeout(total=DEADLINE),
+                                proxy=proxy_url) as resp:
+            await resp.read()
+            if resp.status == 200 and 'charset=utf-8' in resp.headers.get('Content-Type', ''):
+                stats.add_sent()
+            else:
+                stats.add_fail()
     except asyncio.TimeoutError:
         stats.add_timeout()
-    except Exception:
+    except:
         stats.add_error()
 
 async def send_share(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
@@ -527,70 +467,39 @@ async def send_share(session: aiohttp.ClientSession, vid: str, stats: TikTokStat
     d = DEV_POOL.get()
     osv = str(random.randint(5, 12))
     params = {
-        "app_language": "fr",
-        "iid": d["iid"],
-        "device_id": d["device_id"],
-        "channel": d["channel"],
-        "device_type": d["device_type"],
-        "ac": "wifi",
-        "os_version": osv,
-        "version_code": str(build),
-        "app_name": d["app_name"],
-        "device_brand": d["device_brand"],
-        "ssmix": "a",
-        "device_platform": "android",
-        "aid": "1180",
-        "as": "a1iosdfgh",
-        "cp": "androide1",
+        "app_language": "fr", "iid": d["iid"], "device_id": d["device_id"],
+        "channel": d["channel"], "device_type": d["device_type"], "ac": "wifi",
+        "os_version": osv, "version_code": str(build), "app_name": d["app_name"],
+        "device_brand": d["device_brand"], "ssmix": "a", "device_platform": "android",
+        "aid": "1180", "as": "a1iosdfgh", "cp": "androide1",
     }
-    data_payload = {
-        "manifest_version_code": str(build),
-        "update_version_code": str(build) + "0",
-        "share_delta": "1",
-        "item_id": vid,
-        "version_code": str(build),
-        "aweme_type": "0",
-    }
-    x_gorgon = generate_x_gorgon(params, data_payload)
-    khronos = str(int(time.time()))
     headers = {
-        "Host": HOST,
-        "Connection": "keep-alive",
-        "Accept-Encoding": "gzip",
+        "Host": HOST, "Connection": "keep-alive", "Accept-Encoding": "gzip",
         "X-SS-REQ-TICKET": str(int(time.time() * 1000)),
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "User-Agent": d["user_agent"],
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "application/json",
-        "X-Forwarded-For": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
-        "X-Khronos": khronos,
-        "X-Gorgon": x_gorgon,
+    }
+    data = {
+        "manifest_version_code": str(build), "update_version_code": str(build) + "0",
+        "share_delta": "1", "item_id": vid, "version_code": str(build), "aweme_type": "0",
     }
     url = f"https://{HOST}/aweme/v1/aweme/stats"
     proxy_url = PROXY_MANAGER.get_proxy_url(proxy) if proxy else None
     try:
-        async with GLOBAL_SEM:
-            async with session.post(url, params=params, data=data_payload, headers=headers,
-                                    timeout=aiohttp.ClientTimeout(total=DEADLINE),
-                                    proxy=proxy_url) as resp:
-                text = await resp.text()
-                if resp.status == 200:
-                    try:
-                        json_resp = json.loads(text)
-                        if json_resp.get("status_code") == 0:
-                            stats.add_sent()
-                        else:
-                            stats.add_fail()
-                    except:
-                        stats.add_sent()
-                else:
-                    stats.add_fail()
+        async with session.post(url, params=params, data=data, headers=headers,
+                                timeout=aiohttp.ClientTimeout(total=DEADLINE),
+                                proxy=proxy_url) as resp:
+            await resp.read()
+            if resp.status == 200 and 'charset=utf-8' in resp.headers.get('Content-Type', ''):
+                stats.add_sent()
+            else:
+                stats.add_fail()
     except asyncio.TimeoutError:
         stats.add_timeout()
-    except Exception:
+    except:
         stats.add_error()
 
-# ---------- RUNNERS ----------
+# ---------- RUNNERS (unchanged, but use the updated send functions) ----------
 async def run_tiktok_views(vid: str, target: int, threads: int = 50, callback=None, stop_flag=None) -> int:
     stats = TikTokStats()
     sem = asyncio.Semaphore(threads)
@@ -977,10 +886,7 @@ async def stop_job(order_id: str, user=Depends(get_current_user)):
     job.cancelled = True
     return JSONResponse({"status": "ok", "message": "Stop signal sent"})
 
-# ---------- HTML TEMPLATE ----------
-# (Use the same HTML_TEMPLATE from the previous answer – full UI with login, profile, views, shares, etc.)
-# For brevity, the full HTML is omitted here, but you must include it.
-# It is identical to the one in the previous response.
+# ---------- UPDATED HTML (full UI from earlier, with profile, sign-out, etc.) ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -990,6 +896,7 @@ HTML_TEMPLATE = """
     <title>TTKY AIO</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
+        /* Copy the complete CSS from the previous response – it's the same as before */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             background: #0c1017;
