@@ -5,4 +5,3 @@ psutil==5.9.8
 bcrypt==4.1.2
 PyJWT==2.8.0
 python-multipart==0.0.6
-tiktok-signature==1.3
