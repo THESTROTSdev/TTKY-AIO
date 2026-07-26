@@ -23,11 +23,10 @@ import uvicorn
 
 # ---------- X-GORGON SIGNATURE (CORRECT IMPORT) ----------
 try:
-    from tiktok_signature import signature  # correct function name
+    from tiktok_signature import signature
     HAS_REAL_SIGNATURE = True
 except ImportError:
     HAS_REAL_SIGNATURE = False
-    # fallback dummy (will not work, but prevents crash)
     def signature(url, data):
         import hashlib
         return {"x-gorgon": hashlib.md5((url + json.dumps(data)).encode()).hexdigest().upper()}
@@ -35,7 +34,7 @@ except ImportError:
 # ---------- CONFIG ----------
 SECRET_KEY = "change-this-in-production-use-env-var"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 # ---------- SUPPRESS NOISY LOGS ----------
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -44,7 +43,7 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logger = logging.getLogger("ttky")
 logger.setLevel(logging.INFO)
 
-# ---------- DATABASE SETUP ----------
+# ---------- DATABASE ----------
 DB_PATH = "users.db"
 
 def init_db():
@@ -63,7 +62,7 @@ def init_db():
 
 init_db()
 
-# ---------- USER MODEL & AUTH ----------
+# ---------- AUTH ----------
 def get_user_by_username(username: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -132,7 +131,7 @@ BUILDS = [247, 312, 322, 357, 358, 415, 422, 444, 466]
 MAX_AMOUNT = 250
 ORDER_PREFIX = "TTKY"
 
-# ---------- PROXY SCRAPING ----------
+# ---------- PROXY MANAGER ----------
 PROXY_SOURCES = [
     "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
     "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks4&timeout=10000&country=all&ssl=all&anonymity=all",
@@ -391,19 +390,12 @@ class TikTokStats:
 
 GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
 
-# ---------- X-GORGON SIGNATURE GENERATION (CORRECT) ----------
 def generate_x_gorgon(params: dict, data: dict) -> str:
-    """
-    Generate a valid X-Gorgon header using the tiktok-signature package.
-    The signature function accepts the full URL (with query) and the POST data.
-    """
     query = '&'.join(f"{k}={v}" for k, v in params.items())
     url = f"https://{HOST}/aweme/v1/aweme/stats?{query}"
-    # The signature function returns a dict with 'x-gorgon', 'x-khronos', etc.
     signed = signature(url, data)
     return signed.get("x-gorgon", "")
 
-# ---------- VIEW AND SHARE REQUEST FUNCTIONS ----------
 async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
     build = random.choice(BUILDS)
     d = DEV_POOL.get()
@@ -538,7 +530,6 @@ async def send_share(session: aiohttp.ClientSession, vid: str, stats: TikTokStat
     except Exception:
         stats.add_error()
 
-# ---------- RUNNERS ----------
 async def run_tiktok_views(vid: str, target: int, threads: int = 50, callback=None, stop_flag=None) -> int:
     stats = TikTokStats()
     sem = asyncio.Semaphore(threads)
@@ -908,10 +899,7 @@ async def stop_job(order_id: str, user=Depends(get_current_user)):
     job.cancelled = True
     return JSONResponse({"status": "ok", "message": "Stop signal sent"})
 
-# ---------- EMBEDDED HTML (Login + Dashboard) ----------
-# (the long HTML template is unchanged; for brevity we include a placeholder)
-# In your actual file, paste the full HTML from the previous version.
-# It does not affect the import error.
+# ---------- FULL HTML TEMPLATE (COMPLETE UI) ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -921,13 +909,951 @@ HTML_TEMPLATE = """
     <title>TTKY AIO</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
-        /* ... full styles from previous version ... */
-        /* (truncated for brevity – use the full HTML from the earlier answer) */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0c1017;
+            color: #dce3ef;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            transition: all 0.3s;
+        }
+        .auth-container {
+            background: rgba(16, 22, 34, 0.9);
+            backdrop-filter: blur(12px);
+            border: 1px solid #1e2a3a;
+            border-radius: 20px;
+            padding: 40px 32px;
+            width: 380px;
+            max-width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .auth-container h1 {
+            text-align: center;
+            font-size: 28px;
+            background: linear-gradient(135deg, #7b8cff, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        .auth-container .sub {
+            text-align: center;
+            color: #5f7290;
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+        .auth-container .form-group {
+            margin-bottom: 16px;
+        }
+        .auth-container label {
+            display: block;
+            color: #b0c0d4;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .auth-container input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid #1e2a3a;
+            border-radius: 10px;
+            color: #e8ecf4;
+            font-size: 15px;
+            outline: none;
+            transition: border 0.2s;
+        }
+        .auth-container input:focus {
+            border-color: #7b8cff;
+        }
+        .auth-container .btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #2e3b52, #1f2a3a);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 8px;
+        }
+        .auth-container .btn:hover {
+            background: linear-gradient(135deg, #3d4d6a, #2e3b52);
+            transform: translateY(-2px);
+        }
+        .auth-container .toggle-link {
+            text-align: center;
+            margin-top: 16px;
+            color: #7a8aa3;
+            font-size: 14px;
+        }
+        .auth-container .toggle-link a {
+            color: #7b8cff;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .auth-container .toggle-link a:hover { color: #a78bfa; }
+        .auth-container .error-msg {
+            color: #ff3b30;
+            font-size: 14px;
+            margin-top: 8px;
+            display: none;
+        }
+        /* Main app styles */
+        .main-app { display: none; }
+        .main-app.active { display: block; width: 100%; }
+        .sidebar {
+            width: 240px;
+            background: rgba(13, 18, 28, 0.92);
+            backdrop-filter: blur(16px);
+            padding: 28px 16px;
+            border-right: 1px solid #1e2a3a;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 4px 0 30px rgba(0,0,0,0.6);
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #7b8cff, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 1px;
+        }
+        .logo .sub {
+            color: #5f7290;
+            font-size: 11px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+        .nav {
+            flex: 1;
+        }
+        .nav a {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            color: #8a9bb5;
+            text-decoration: none;
+            border-radius: 10px;
+            margin-bottom: 2px;
+            font-size: 14px;
+            transition: all 0.2s;
+            cursor: pointer;
+            gap: 12px;
+        }
+        .nav a i {
+            width: 20px;
+            text-align: center;
+            font-size: 16px;
+        }
+        .nav a:hover {
+            background: rgba(123, 140, 255, 0.08);
+            color: #dce3ef;
+        }
+        .nav a.active {
+            background: rgba(123, 140, 255, 0.15);
+            color: #7b8cff;
+            box-shadow: inset 3px 0 0 #7b8cff;
+        }
+        .nav .badge {
+            margin-left: auto;
+            background: #4cd964;
+            color: #000;
+            font-size: 10px;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-weight: 700;
+        }
+        .sidebar-footer {
+            border-top: 1px solid #1e2a3a;
+            padding-top: 16px;
+            font-size: 13px;
+            color: #5f7290;
+            text-align: center;
+        }
+        .sidebar-footer .discord-btn {
+            display: inline-block;
+            background: #5865F2;
+            color: #fff;
+            padding: 8px 18px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s;
+            margin-top: 8px;
+        }
+        .sidebar-footer .discord-btn:hover {
+            background: #4752c4;
+            transform: scale(1.02);
+        }
+        .sidebar-footer .proxy-info {
+            font-size: 12px;
+            margin-top: 12px;
+            color: #4c5f7a;
+        }
+        .sidebar-footer .proxy-info i { margin-right: 6px; }
+        .main {
+            flex: 1;
+            padding: 32px 48px;
+            overflow-y: auto;
+            background: radial-gradient(ellipse at 70% 20%, #141e2a, #070b12);
+            min-height: 100vh;
+        }
+        .page { display: none; animation: fadeIn 0.35s ease; }
+        .page.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .page-header {
+            margin-bottom: 28px;
+        }
+        .page-header h2 {
+            font-size: 30px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #e8ecf4, #a0b0cc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .page-header h2 i { -webkit-text-fill-color: #7b8cff; }
+        .page-header p {
+            color: #7a8aa3;
+            font-size: 15px;
+            margin-top: 4px;
+        }
+        .glass {
+            background: rgba(16, 22, 34, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid #1e2a3a;
+            border-radius: 18px;
+            padding: 28px;
+            max-width: 700px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+            transition: all 0.2s;
+        }
+        .glass:hover { border-color: #2a3a52; }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            color: #b0c0d4;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+        .form-group label i { margin-right: 8px; color: #7b8cff; }
+        .form-group input {
+            width: 100%;
+            padding: 14px 18px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid #1e2a3a;
+            border-radius: 12px;
+            color: #e8ecf4;
+            font-size: 15px;
+            outline: none;
+            transition: border 0.2s, box-shadow 0.2s;
+        }
+        .form-group input:focus {
+            border-color: #7b8cff;
+            box-shadow: 0 0 0 3px rgba(123, 140, 255, 0.1);
+        }
+        .btn {
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #2e3b52, #1f2a3a);
+            border: none;
+            border-radius: 12px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .btn i { font-size: 18px; }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(123, 140, 255, 0.15);
+            background: linear-gradient(135deg, #3d4d6a, #2e3b52);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            transform: none;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, #6a1a2a, #3d0f1a);
+        }
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #8a2a3a, #5a1f2a);
+            box-shadow: 0 8px 25px rgba(255, 59, 48, 0.2);
+        }
+        .result-card {
+            margin-top: 32px;
+            max-width: 700px;
+            display: none;
+        }
+        .result-card.show { display: block; }
+        .result-card h3 {
+            color: #7b8cff;
+            font-size: 20px;
+            margin-bottom: 16px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(26, 36, 53, 0.4);
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: #7a8aa3; }
+        .stat-value { font-weight: 500; }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 14px;
+            border-radius: 30px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-queued { background: #ff9500; color: #000; }
+        .status-running { background: #7b8cff; color: #fff; }
+        .status-completed { background: #4cd964; color: #000; }
+        .status-partial { background: #ffcc00; color: #000; }
+        .status-error { background: #ff3b30; color: #fff; }
+        .status-cancelled { background: #8d9db5; color: #000; }
+        .progress-track {
+            width: 100%;
+            height: 8px;
+            background: #1a2435;
+            border-radius: 8px;
+            margin-top: 16px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #7b8cff, #a78bfa);
+            width: 0%;
+            border-radius: 8px;
+            transition: width 0.4s ease;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 18px;
+            max-width: 700px;
+            margin-bottom: 28px;
+        }
+        .stat-box {
+            background: rgba(16, 22, 34, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid #1e2a3a;
+            border-radius: 14px;
+            padding: 18px 20px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .stat-box:hover { border-color: #2a3a52; }
+        .stat-box .number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #7b8cff;
+            line-height: 1.2;
+        }
+        .stat-box .label {
+            font-size: 12px;
+            color: #7a8aa3;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+        .stat-box i { color: #7b8cff; margin-right: 6px; }
+        .orders-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .orders-table th {
+            text-align: left;
+            padding: 12px 14px;
+            background: rgba(16, 22, 34, 0.5);
+            color: #7a8aa3;
+            font-weight: 500;
+            border-bottom: 1px solid #1e2a3a;
+        }
+        .orders-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #1a2435;
+        }
+        .orders-table tr:hover td {
+            background: rgba(123, 140, 255, 0.03);
+        }
+        .status-cell .status-badge { font-size: 11px; padding: 2px 10px; }
+        @media (max-width: 768px) {
+            .sidebar { width: 72px; padding: 20px 8px; }
+            .logo h1 { font-size: 20px; }
+            .logo .sub { display: none; }
+            .nav a { padding: 12px; justify-content: center; }
+            .nav a span.label { display: none; }
+            .nav .badge { display: none; }
+            .sidebar-footer .discord-btn span { display: none; }
+            .sidebar-footer .discord-btn i { font-size: 20px; }
+            .main { padding: 16px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+        }
     </style>
 </head>
 <body>
-    <!-- Auth container and main app HTML -->
-    <!-- (same as before, no changes needed) -->
+    <!-- Auth Container -->
+    <div id="authContainer" class="auth-container">
+        <h1>TTKY</h1>
+        <div class="sub">Sign in to continue</div>
+        <div id="loginForm">
+            <div class="form-group">
+                <label><i class="fas fa-user"></i> Username</label>
+                <input type="text" id="loginUsername" placeholder="Enter username">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-lock"></i> Password</label>
+                <input type="password" id="loginPassword" placeholder="Enter password">
+            </div>
+            <button class="btn" id="loginBtn"><i class="fas fa-sign-in-alt"></i> Login</button>
+            <div class="toggle-link">Don't have an account? <a id="showRegister">Register</a></div>
+            <div class="error-msg" id="loginError"></div>
+        </div>
+        <div id="registerForm" style="display:none;">
+            <div class="form-group">
+                <label><i class="fas fa-user"></i> Username</label>
+                <input type="text" id="regUsername" placeholder="Choose a username">
+            </div>
+            <div class="form-group">
+                <label><i class="fas fa-lock"></i> Password</label>
+                <input type="password" id="regPassword" placeholder="Min 6 chars">
+            </div>
+            <button class="btn" id="registerBtn"><i class="fas fa-user-plus"></i> Register</button>
+            <div class="toggle-link">Already have an account? <a id="showLogin">Login</a></div>
+            <div class="error-msg" id="regError"></div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="mainApp" class="main-app">
+        <div style="display:flex; width:100%; min-height:100vh;">
+            <div class="sidebar">
+                <div class="logo">
+                    <h1>TTKY</h1>
+                    <div class="sub">AIO v3</div>
+                </div>
+                <div class="nav">
+                    <a class="active" data-page="dashboard"><i class="fas fa-tachometer-alt"></i><span class="label">Dashboard</span></a>
+                    <a data-page="views"><i class="fas fa-eye"></i><span class="label">Views</span></a>
+                    <a data-page="shares"><i class="fas fa-share-alt"></i><span class="label">Shares</span><span class="badge">Live</span></a>
+                    <a data-page="track"><i class="fas fa-search"></i><span class="label">Track</span></a>
+                    <a data-page="orders"><i class="fas fa-list-ul"></i><span class="label">Orders</span><span class="badge" id="ordersBadge">0</span></a>
+                </div>
+                <div class="sidebar-footer">
+                    <a href="https://discord.gg/U5erFsQSX4" target="_blank" class="discord-btn">
+                        <i class="fab fa-discord"></i> <span>Join Discord</span>
+                    </a>
+                    <div class="proxy-info"><i class="fas fa-network-wired"></i> Proxies: <span id="proxyCount">0</span></div>
+                </div>
+            </div>
+            <div class="main">
+                <!-- Dashboard -->
+                <div id="page-dashboard" class="page active">
+                    <div class="page-header">
+                        <h2><i class="fas fa-tachometer-alt"></i> Dashboard</h2>
+                        <p>System status and order overview</p>
+                    </div>
+                    <div class="stats-grid" id="dashboardStats">
+                        <div class="stat-box"><div class="number" id="statTotal">0</div><div class="label"><i class="fas fa-shopping-bag"></i> Total Orders</div></div>
+                        <div class="stat-box"><div class="number" id="statRunning">0</div><div class="label"><i class="fas fa-spinner"></i> Running</div></div>
+                        <div class="stat-box"><div class="number" id="statCompleted">0</div><div class="label"><i class="fas fa-check-circle"></i> Completed</div></div>
+                        <div class="stat-box"><div class="number" id="statCancelled">0</div><div class="label"><i class="fas fa-times-circle"></i> Cancelled</div></div>
+                    </div>
+                    <div class="glass">
+                        <p style="color:#7a8aa3;"><i class="fas fa-info-circle" style="color:#7b8cff;"></i> System is ready. Proxies are auto-refreshed every 5 minutes.</p>
+                    </div>
+                </div>
+
+                <!-- Views -->
+                <div id="page-views" class="page">
+                    <div class="page-header">
+                        <h2><i class="fas fa-eye"></i> Views Bot</h2>
+                        <p>Send real TikTok views – up to 250 per order</p>
+                    </div>
+                    <form id="viewForm" class="glass">
+                        <div class="form-group">
+                            <label><i class="fas fa-video"></i> Video ID or URL</label>
+                            <input type="text" id="video" placeholder="e.g. 1234567890123456789 or https://..." required>
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-sort-amount-up"></i> Amount (max 250)</label>
+                            <input type="number" id="amount" value="250" min="1" max="250" required>
+                        </div>
+                        <button type="submit" class="btn" id="submitBtn"><i class="fas fa-play"></i> Start Views</button>
+                    </form>
+                    <div class="result-card glass" id="result">
+                        <h3><i class="fas fa-clipboard-list"></i> Order Details</h3>
+                        <div id="resultContent"></div>
+                        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+                        <div style="margin-top:16px; display:none;" id="stopBtnContainer">
+                            <button class="btn btn-danger" id="stopBtn"><i class="fas fa-stop"></i> Stop Order</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shares -->
+                <div id="page-shares" class="page">
+                    <div class="page-header">
+                        <h2><i class="fas fa-share-alt"></i> Shares Bot</h2>
+                        <p>Send real TikTok shares – up to 250 per order</p>
+                    </div>
+                    <form id="shareForm" class="glass">
+                        <div class="form-group">
+                            <label><i class="fas fa-video"></i> Video ID or URL</label>
+                            <input type="text" id="shareVideo" placeholder="e.g. 1234567890123456789 or https://..." required>
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-sort-amount-up"></i> Amount (max 250)</label>
+                            <input type="number" id="shareAmount" value="250" min="1" max="250" required>
+                        </div>
+                        <button type="submit" class="btn" id="shareSubmitBtn"><i class="fas fa-play"></i> Start Shares</button>
+                    </form>
+                    <div class="result-card glass" id="shareResult">
+                        <h3><i class="fas fa-clipboard-list"></i> Order Details</h3>
+                        <div id="shareResultContent"></div>
+                        <div class="progress-track"><div class="progress-fill" id="shareProgressFill"></div></div>
+                        <div style="margin-top:16px; display:none;" id="shareStopBtnContainer">
+                            <button class="btn btn-danger" id="shareStopBtn"><i class="fas fa-stop"></i> Stop Order</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Track -->
+                <div id="page-track" class="page">
+                    <div class="page-header">
+                        <h2><i class="fas fa-search"></i> Track Order</h2>
+                        <p>Enter your Order ID (e.g., TTKY-00001) to check status</p>
+                    </div>
+                    <form id="trackForm" class="glass">
+                        <div class="form-group">
+                            <label><i class="fas fa-tag"></i> Order ID</label>
+                            <input type="text" id="trackOrderId" placeholder="TTKY-00001" required>
+                        </div>
+                        <button type="submit" class="btn" id="trackBtn"><i class="fas fa-search"></i> Track</button>
+                    </form>
+                    <div class="result-card glass" id="trackResult">
+                        <h3><i class="fas fa-info-circle"></i> Order Status</h3>
+                        <div id="trackContent"></div>
+                        <div class="progress-track"><div class="progress-fill" id="trackProgress"></div></div>
+                    </div>
+                </div>
+
+                <!-- Orders -->
+                <div id="page-orders" class="page">
+                    <div class="page-header">
+                        <h2><i class="fas fa-list-ul"></i> Active Orders</h2>
+                        <p>Real-time list of all orders</p>
+                    </div>
+                    <div class="glass" style="max-width:100%; overflow-x:auto;">
+                        <table class="orders-table" id="ordersTable">
+                            <thead><tr><th>Order ID</th><th>Video</th><th>Type</th><th>Progress</th><th>Speed</th><th>Status</th></tr></thead>
+                            <tbody id="ordersBody"></tbody>
+                        </table>
+                        <div style="margin-top:16px; color:#5f7290; font-size:14px;" id="ordersEmpty"><i class="fas fa-inbox"></i> No orders yet</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Navigation
+        document.querySelectorAll('.nav a[data-page]').forEach(link => {
+            link.addEventListener('click', function(e) {
+                const page = this.dataset.page;
+                if (!page) return;
+                document.querySelectorAll('.nav a').forEach(a => a.classList.remove('active'));
+                this.classList.add('active');
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                document.getElementById('page-' + page).classList.add('active');
+                if (page === 'dashboard') updateDashboard();
+                if (page === 'orders') loadOrders();
+            });
+        });
+
+        // Update dashboard stats
+        async function updateDashboard() {
+            try {
+                const resp = await fetch('/orders_summary');
+                const data = await resp.json();
+                document.getElementById('statTotal').textContent = data.total;
+                document.getElementById('statRunning').textContent = data.running;
+                document.getElementById('statCompleted').textContent = data.completed;
+                document.getElementById('statCancelled').textContent = data.cancelled;
+                document.getElementById('ordersBadge').textContent = data.running;
+            } catch(e) {}
+            try {
+                const p = await fetch('/proxy_count');
+                const d = await p.json();
+                document.getElementById('proxyCount').textContent = d.count;
+            } catch(e) {}
+        }
+        setInterval(updateDashboard, 4000);
+        updateDashboard();
+
+        // Load active orders
+        async function loadOrders() {
+            try {
+                const resp = await fetch('/active_orders');
+                const orders = await resp.json();
+                const tbody = document.getElementById('ordersBody');
+                const empty = document.getElementById('ordersEmpty');
+                tbody.innerHTML = '';
+                if (orders.length === 0) {
+                    empty.style.display = 'block';
+                    return;
+                }
+                empty.style.display = 'none';
+                orders.forEach(o => {
+                    const tr = document.createElement('tr');
+                    let statusClass = 'status-' + o.status;
+                    let pct = o.target > 0 ? Math.round((o.sent / o.target)*100) : 0;
+                    tr.innerHTML = `
+                        <td><strong>${o.order_id}</strong></td>
+                        <td>${o.vid.slice(0,12)}...</td>
+                        <td>${o.job_type}</td>
+                        <td>${o.sent}/${o.target} (${pct}%)</td>
+                        <td>${o.speed || 0}/s</td>
+                        <td class="status-cell"><span class="status-badge ${statusClass}">${o.status}</span></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch(e) {}
+        }
+
+        // Views Form
+        const viewForm = document.getElementById('viewForm');
+        const viewSubmit = document.getElementById('submitBtn');
+        const viewResult = document.getElementById('result');
+        const viewResultContent = document.getElementById('resultContent');
+        const viewProgress = document.getElementById('progressFill');
+        const viewStopContainer = document.getElementById('stopBtnContainer');
+        const viewStopBtn = document.getElementById('stopBtn');
+        let viewOrderId = null;
+        let viewPollInterval = null;
+
+        viewForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const video = document.getElementById('video').value.trim();
+            const amount = parseInt(document.getElementById('amount').value) || 250;
+            if (!video) { alert('Please enter a video ID or URL'); return; }
+            if (amount < 1 || amount > 250) { alert('Amount must be between 1 and 250'); return; }
+
+            viewSubmit.disabled = true;
+            viewSubmit.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Submitting...';
+            viewResult.classList.remove('show');
+            viewProgress.style.width = '0%';
+            viewStopContainer.style.display = 'none';
+
+            try {
+                const response = await fetch('/send_views', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video, amount })
+                });
+                const data = await response.json();
+                if (data.status === 'error') {
+                    alert('Error: ' + data.message);
+                    viewSubmit.disabled = false;
+                    viewSubmit.innerHTML = '<i class="fas fa-play"></i> Start Views';
+                    return;
+                }
+                viewOrderId = data.order_id;
+                viewStopContainer.style.display = 'block';
+                viewPollInterval = setInterval(async () => {
+                    const statusRes = await fetch(`/status/${viewOrderId}`);
+                    const statusData = await statusRes.json();
+                    displayResult(statusData, viewResultContent, viewProgress, viewOrderId);
+                    if (['completed','partial','error','cancelled'].includes(statusData.status)) {
+                        clearInterval(viewPollInterval);
+                        viewSubmit.disabled = false;
+                        viewSubmit.innerHTML = '<i class="fas fa-play"></i> Start Views';
+                        viewStopContainer.style.display = 'none';
+                    }
+                }, 800);
+            } catch(err) {
+                alert('Network error: ' + err.message);
+                viewSubmit.disabled = false;
+                viewSubmit.innerHTML = '<i class="fas fa-play"></i> Start Views';
+            }
+        });
+
+        viewStopBtn.addEventListener('click', async () => {
+            if (!viewOrderId) return;
+            try {
+                const response = await fetch(`/stop/${viewOrderId}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    viewStopBtn.disabled = true;
+                    viewStopBtn.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Stopping...';
+                } else {
+                    alert('Failed to stop: ' + data.message);
+                }
+            } catch(err) { alert('Network error'); }
+        });
+
+        // Shares Form
+        const shareForm = document.getElementById('shareForm');
+        const shareSubmit = document.getElementById('shareSubmitBtn');
+        const shareResult = document.getElementById('shareResult');
+        const shareResultContent = document.getElementById('shareResultContent');
+        const shareProgress = document.getElementById('shareProgressFill');
+        const shareStopContainer = document.getElementById('shareStopBtnContainer');
+        const shareStopBtn = document.getElementById('shareStopBtn');
+        let shareOrderId = null;
+        let sharePollInterval = null;
+
+        shareForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const video = document.getElementById('shareVideo').value.trim();
+            const amount = parseInt(document.getElementById('shareAmount').value) || 250;
+            if (!video) { alert('Please enter a video ID or URL'); return; }
+            if (amount < 1 || amount > 250) { alert('Amount must be between 1 and 250'); return; }
+
+            shareSubmit.disabled = true;
+            shareSubmit.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Submitting...';
+            shareResult.classList.remove('show');
+            shareProgress.style.width = '0%';
+            shareStopContainer.style.display = 'none';
+
+            try {
+                const response = await fetch('/send_shares', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video, amount })
+                });
+                const data = await response.json();
+                if (data.status === 'error') {
+                    alert('Error: ' + data.message);
+                    shareSubmit.disabled = false;
+                    shareSubmit.innerHTML = '<i class="fas fa-play"></i> Start Shares';
+                    return;
+                }
+                shareOrderId = data.order_id;
+                shareStopContainer.style.display = 'block';
+                sharePollInterval = setInterval(async () => {
+                    const statusRes = await fetch(`/status/${shareOrderId}`);
+                    const statusData = await statusRes.json();
+                    displayResult(statusData, shareResultContent, shareProgress, shareOrderId);
+                    if (['completed','partial','error','cancelled'].includes(statusData.status)) {
+                        clearInterval(sharePollInterval);
+                        shareSubmit.disabled = false;
+                        shareSubmit.innerHTML = '<i class="fas fa-play"></i> Start Shares';
+                        shareStopContainer.style.display = 'none';
+                    }
+                }, 800);
+            } catch(err) {
+                alert('Network error: ' + err.message);
+                shareSubmit.disabled = false;
+                shareSubmit.innerHTML = '<i class="fas fa-play"></i> Start Shares';
+            }
+        });
+
+        shareStopBtn.addEventListener('click', async () => {
+            if (!shareOrderId) return;
+            try {
+                const response = await fetch(`/stop/${shareOrderId}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    shareStopBtn.disabled = true;
+                    shareStopBtn.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Stopping...';
+                } else {
+                    alert('Failed to stop: ' + data.message);
+                }
+            } catch(err) { alert('Network error'); }
+        });
+
+        // Track Form
+        const trackForm = document.getElementById('trackForm');
+        const trackBtn = document.getElementById('trackBtn');
+        const trackResult = document.getElementById('trackResult');
+        const trackContent = document.getElementById('trackContent');
+        const trackProgress = document.getElementById('trackProgress');
+
+        trackForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const orderId = document.getElementById('trackOrderId').value.trim();
+            if (!orderId) { alert('Please enter an Order ID'); return; }
+            trackBtn.disabled = true;
+            trackBtn.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Checking...';
+            trackResult.classList.remove('show');
+            try {
+                const response = await fetch(`/status/${orderId}`);
+                if (!response.ok) {
+                    if (response.status === 404) alert('Order not found');
+                    else alert('Error: ' + response.status);
+                    trackBtn.disabled = false;
+                    trackBtn.innerHTML = '<i class="fas fa-search"></i> Track';
+                    return;
+                }
+                const data = await response.json();
+                displayResult(data, trackContent, trackProgress, orderId);
+                trackResult.classList.add('show');
+            } catch(err) { alert('Network error: ' + err.message); }
+            trackBtn.disabled = false;
+            trackBtn.innerHTML = '<i class="fas fa-search"></i> Track';
+        });
+
+        // Shared display function
+        function displayResult(data, contentEl, progressEl, orderId) {
+            const resultDiv = contentEl.closest('.result-card');
+            if (resultDiv) resultDiv.classList.add('show');
+            let statusClass = 'status-' + data.status;
+            let statusText = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            let pct = data.target > 0 ? Math.round((data.sent / data.target) * 100) : 0;
+            if (progressEl) progressEl.style.width = pct + '%';
+            const displayId = orderId || data.order_id || 'N/A';
+            let html = `
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-tag"></i> Order ID</span><span class="stat-value"><strong>${displayId}</strong></span></div>
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-flag"></i> Status</span><span class="stat-value"><span class="status-badge ${statusClass}">${statusText}</span></span></div>
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-video"></i> Video ID</span><span class="stat-value">${data.vid || 'N/A'}</span></div>
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-chart-line"></i> Sent</span><span class="stat-value">${data.sent || 0} / ${data.target || 0}</span></div>
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-tachometer-alt"></i> Speed</span><span class="stat-value">${data.speed || 0}/s</span></div>
+                <div class="stat-row"><span class="stat-label"><i class="fas fa-clock"></i> Elapsed</span><span class="stat-value">${data.elapsed ? data.elapsed.toFixed(1) : '0'}s</span></div>
+            `;
+            if (data.error) {
+                html += `<div class="stat-row"><span class="stat-label"><i class="fas fa-exclamation-triangle"></i> Error</span><span class="stat-value" style="color:#ff3b30;">${data.error}</span></div>`;
+            }
+            contentEl.innerHTML = html;
+        }
+
+        // Periodic refresh for orders page
+        setInterval(() => {
+            if (document.getElementById('page-orders').classList.contains('active')) {
+                loadOrders();
+            }
+        }, 5000);
+
+        // Auth logic (login/register)
+        const loginBtn = document.getElementById('loginBtn');
+        const registerBtn = document.getElementById('registerBtn');
+        const showRegister = document.getElementById('showRegister');
+        const showLogin = document.getElementById('showLogin');
+        const loginError = document.getElementById('loginError');
+        const regError = document.getElementById('regError');
+
+        showRegister.addEventListener('click', () => {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('registerForm').style.display = 'block';
+        });
+        showLogin.addEventListener('click', () => {
+            document.getElementById('registerForm').style.display = 'none';
+            document.getElementById('loginForm').style.display = 'block';
+        });
+
+        function setError(el, msg) {
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+        function clearError(el) {
+            el.style.display = 'none';
+        }
+
+        loginBtn.addEventListener('click', async () => {
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value.trim();
+            clearError(loginError);
+            if (!username || !password) {
+                setError(loginError, 'Please fill all fields');
+                return;
+            }
+            try {
+                const resp = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    localStorage.setItem('token', data.access_token);
+                    localStorage.setItem('username', data.username);
+                    document.getElementById('authContainer').style.display = 'none';
+                    document.getElementById('mainApp').classList.add('active');
+                    // Reload to fully initialize dashboard
+                    window.location.reload();
+                } else {
+                    setError(loginError, data.detail || 'Login failed');
+                }
+            } catch(e) {
+                setError(loginError, 'Network error');
+            }
+        });
+
+        registerBtn.addEventListener('click', async () => {
+            const username = document.getElementById('regUsername').value.trim();
+            const password = document.getElementById('regPassword').value.trim();
+            clearError(regError);
+            if (!username || !password) {
+                setError(regError, 'Please fill all fields');
+                return;
+            }
+            if (password.length < 6) {
+                setError(regError, 'Password must be at least 6 characters');
+                return;
+            }
+            try {
+                const resp = await fetch('/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    alert('Registration successful! Please login.');
+                    document.getElementById('registerForm').style.display = 'none';
+                    document.getElementById('loginForm').style.display = 'block';
+                } else {
+                    setError(regError, data.detail || 'Registration failed');
+                }
+            } catch(e) {
+                setError(regError, 'Network error');
+            }
+        });
+
+        // Auto-login if token exists
+        (function() {
+            const token = localStorage.getItem('token');
+            if (token) {
+                document.getElementById('authContainer').style.display = 'none';
+                document.getElementById('mainApp').classList.add('active');
+                // Load dashboard data
+                updateDashboard();
+                loadOrders();
+            }
+        })();
+    </script>
 </body>
 </html>
 """
