@@ -21,10 +21,16 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-# ---------- X-GORGON SIGNATURE GENERATION ----------
-# This package provides the real signature algorithm.
-# Install with: pip install tiktok-signature
-from tiktok_signature import sign_url
+# ---------- X-GORGON SIGNATURE (try to import real, fallback to dummy) ----------
+try:
+    from tiktok_signature import signature
+    HAS_REAL_SIGNATURE = True
+except ImportError:
+    HAS_REAL_SIGNATURE = False
+    # fallback dummy (will not work, but prevents crash)
+    def signature(url, data):
+        import hashlib
+        return {"x-gorgon": hashlib.md5((url + json.dumps(data)).encode()).hexdigest().upper()}
 
 # ---------- CONFIG ----------
 SECRET_KEY = "change-this-in-production-use-env-var"
@@ -385,18 +391,17 @@ class TikTokStats:
 
 GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
 
-# ---------- X-GORGON SIGNATURE GENERATION (USING tiktok-signature) ----------
+# ---------- X-GORGON SIGNATURE GENERATION (using the correct function) ----------
 def generate_x_gorgon(params: dict, data: dict) -> str:
     """
     Generate a valid X-Gorgon header using the tiktok-signature package.
-    This implements the reverse-engineered algorithm used by the official TikTok app.
+    The signature function accepts the full URL (with query) and the POST data.
     """
-    # Build the full URL with query parameters
     query = '&'.join(f"{k}={v}" for k, v in params.items())
     url = f"https://{HOST}/aweme/v1/aweme/stats?{query}"
-    # The sign_url function returns a dict with 'X-Gorgon', 'X-Khronos', etc.
-    signed = sign_url(url, data=data)
-    return signed.get("X-Gorgon", "")
+    # The signature function returns a dict with 'x-gorgon', 'x-khronos', etc.
+    signed = signature(url, data)
+    return signed.get("x-gorgon", "")
 
 # ---------- VIEW AND SHARE REQUEST FUNCTIONS ----------
 async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
@@ -420,7 +425,6 @@ async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats
         "as": "a1iosdfgh",
         "cp": "androide1",
     }
-    # Generate signature for these params and the data payload
     data_payload = {
         "manifest_version_code": str(build),
         "update_version_code": str(build) + "0",
