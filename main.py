@@ -76,11 +76,21 @@ init_db()
 def get_user_by_username(username: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash FROM users WHERE username = ?", (username,))
+    c.execute("SELECT id, username, password_hash, created_at FROM users WHERE username = ?", (username,))
     row = c.fetchone()
     conn.close()
     if row:
-        return {"id": row[0], "username": row[1], "password_hash": row[2]}
+        return {"id": row[0], "username": row[1], "password_hash": row[2], "created_at": row[3]}
+    return None
+
+def get_user_by_id(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, username, created_at FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"id": row[0], "username": row[1], "created_at": row[2]}
     return None
 
 def create_user(username: str, password: str):
@@ -400,7 +410,6 @@ class TikTokStats:
 
 GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
 
-# ---------- SEND VIEW / SHARE ----------
 async def send_view(session: aiohttp.ClientSession, vid: str, stats: TikTokStats, proxy: Optional[str] = None):
     build = random.choice(BUILDS)
     d = DEV_POOL.get()
@@ -788,10 +797,29 @@ async def login(request: Request):
     token = create_access_token(data={"sub": user["username"]})
     return {"access_token": token, "token_type": "bearer", "username": user["username"]}
 
+@app.post("/logout")
+async def logout():
+    # Server-side nothing needed; client removes token
+    return {"status": "ok"}
+
 # ---------- PROTECTED ENDPOINTS ----------
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_TEMPLATE
+
+@app.get("/profile", dependencies=[Depends(get_current_user)])
+async def get_profile(user=Depends(get_current_user)):
+    # Get user details including created_at
+    user_data = get_user_by_id(user["id"])
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Count total orders for this user
+    total_orders = sum(1 for job in job_store.values() if job.user_id == user["id"])
+    return {
+        "username": user_data["username"],
+        "created_at": user_data["created_at"],
+        "total_orders": total_orders
+    }
 
 @app.get("/orders_summary", dependencies=[Depends(get_current_user)])
 async def orders_summary(user=Depends(get_current_user)):
@@ -906,7 +934,7 @@ async def stop_job(order_id: str, user=Depends(get_current_user)):
     job.cancelled = True
     return JSONResponse({"status": "ok", "message": "Stop signal sent"})
 
-# ---------- FULL HTML TEMPLATE (exact copy from your message) ----------
+# ---------- UPDATED HTML TEMPLATE (with Profile, Sign Out, User Avatar) ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -1029,7 +1057,7 @@ HTML_TEMPLATE = """
         }
         .logo {
             text-align: center;
-            margin-bottom: 32px;
+            margin-bottom: 20px;
         }
         .logo h1 {
             font-size: 28px;
@@ -1045,6 +1073,58 @@ HTML_TEMPLATE = """
             letter-spacing: 3px;
             text-transform: uppercase;
             margin-top: 2px;
+        }
+        .user-area {
+            background: rgba(123, 140, 255, 0.1);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border: 1px solid rgba(123, 140, 255, 0.15);
+        }
+        .user-area .avatar {
+            width: 36px;
+            height: 36px;
+            background: #7b8cff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+            color: #fff;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+        .user-area .user-info {
+            flex: 1;
+            overflow: hidden;
+        }
+        .user-area .user-info .username {
+            font-weight: 600;
+            font-size: 14px;
+            color: #e8ecf4;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .user-area .user-info .subtext {
+            font-size: 11px;
+            color: #7a8aa3;
+        }
+        .user-area .logout-btn {
+            background: transparent;
+            border: none;
+            color: #8d9db5;
+            cursor: pointer;
+            font-size: 18px;
+            transition: color 0.2s;
+            padding: 4px;
+        }
+        .user-area .logout-btn:hover {
+            color: #ff3b30;
         }
         .nav {
             flex: 1;
@@ -1316,6 +1396,28 @@ HTML_TEMPLATE = """
             background: rgba(123, 140, 255, 0.03);
         }
         .status-cell .status-badge { font-size: 11px; padding: 2px 10px; }
+        .profile-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 20px;
+        }
+        .profile-info .info-item {
+            background: rgba(0,0,0,0.2);
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .profile-info .info-item .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #7b8cff;
+        }
+        .profile-info .info-item .label {
+            font-size: 13px;
+            color: #7a8aa3;
+            margin-top: 4px;
+        }
         @media (max-width: 768px) {
             .sidebar { width: 72px; padding: 20px 8px; }
             .logo h1 { font-size: 20px; }
@@ -1325,8 +1427,11 @@ HTML_TEMPLATE = """
             .nav .badge { display: none; }
             .sidebar-footer .discord-btn span { display: none; }
             .sidebar-footer .discord-btn i { font-size: 20px; }
+            .user-area .user-info .subtext, .user-area .user-info .username { display: none; }
+            .user-area .logout-btn { font-size: 16px; }
             .main { padding: 16px; }
             .stats-grid { grid-template-columns: 1fr 1fr; }
+            .profile-info { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1371,10 +1476,20 @@ HTML_TEMPLATE = """
                     <h1>TTKY</h1>
                     <div class="sub">AIO v3</div>
                 </div>
+                <!-- User Area -->
+                <div class="user-area">
+                    <div class="avatar" id="userAvatar">U</div>
+                    <div class="user-info">
+                        <div class="username" id="userName">User</div>
+                        <div class="subtext">Logged in</div>
+                    </div>
+                    <button class="logout-btn" id="logoutBtn" title="Sign Out"><i class="fas fa-sign-out-alt"></i></button>
+                </div>
                 <div class="nav">
                     <a class="active" data-page="dashboard"><i class="fas fa-tachometer-alt"></i><span class="label">Dashboard</span></a>
                     <a data-page="views"><i class="fas fa-eye"></i><span class="label">Views</span></a>
                     <a data-page="shares"><i class="fas fa-share-alt"></i><span class="label">Shares</span><span class="badge">Live</span></a>
+                    <a data-page="profile"><i class="fas fa-user"></i><span class="label">Profile</span></a>
                     <a data-page="track"><i class="fas fa-search"></i><span class="label">Track</span></a>
                     <a data-page="orders"><i class="fas fa-list-ul"></i><span class="label">Orders</span><span class="badge" id="ordersBadge">0</span></a>
                 </div>
@@ -1457,6 +1572,27 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
+                <!-- Profile -->
+                <div id="page-profile" class="page">
+                    <div class="page-header">
+                        <h2><i class="fas fa-user"></i> Profile</h2>
+                        <p>Your account details and statistics</p>
+                    </div>
+                    <div class="glass" id="profileContent">
+                        <div style="display:flex; align-items:center; gap:20px; margin-bottom:20px;">
+                            <div class="avatar" style="width:64px;height:64px;font-size:32px;background:#7b8cff;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;text-transform:uppercase;">U</div>
+                            <div>
+                                <h3 id="profileUsername" style="color:#e8ecf4;font-size:24px;">Username</h3>
+                                <span style="color:#7a8aa3;font-size:14px;">Member since <span id="profileJoined">...</span></span>
+                            </div>
+                        </div>
+                        <div class="profile-info">
+                            <div class="info-item"><div class="value" id="profileTotalOrders">0</div><div class="label">Total Orders</div></div>
+                            <div class="info-item"><div class="value" id="profileProxies">0</div><div class="label">Available Proxies</div></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Track -->
                 <div id="page-track" class="page">
                     <div class="page-header">
@@ -1496,6 +1632,24 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Utility: get token, username
+        function getToken() { return localStorage.getItem('token'); }
+        function getUsername() { return localStorage.getItem('username') || 'User'; }
+
+        // Update user area
+        function updateUserArea() {
+            const username = getUsername();
+            document.getElementById('userName').textContent = username;
+            document.getElementById('userAvatar').textContent = username.charAt(0).toUpperCase();
+        }
+
+        // Logout
+        document.getElementById('logoutBtn').addEventListener('click', function() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            window.location.reload();
+        });
+
         // Navigation
         document.querySelectorAll('.nav a[data-page]').forEach(link => {
             link.addEventListener('click', function(e) {
@@ -1507,13 +1661,17 @@ HTML_TEMPLATE = """
                 document.getElementById('page-' + page).classList.add('active');
                 if (page === 'dashboard') updateDashboard();
                 if (page === 'orders') loadOrders();
+                if (page === 'profile') loadProfile();
             });
         });
 
-        // Update dashboard stats
+        // Dashboard stats
         async function updateDashboard() {
             try {
-                const resp = await fetch('/orders_summary');
+                const resp = await fetch('/orders_summary', {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
+                if (!resp.ok) throw new Error('Unauthorized');
                 const data = await resp.json();
                 document.getElementById('statTotal').textContent = data.total;
                 document.getElementById('statRunning').textContent = data.running;
@@ -1522,7 +1680,9 @@ HTML_TEMPLATE = """
                 document.getElementById('ordersBadge').textContent = data.running;
             } catch(e) {}
             try {
-                const p = await fetch('/proxy_count');
+                const p = await fetch('/proxy_count', {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
                 const d = await p.json();
                 document.getElementById('proxyCount').textContent = d.count;
             } catch(e) {}
@@ -1533,7 +1693,10 @@ HTML_TEMPLATE = """
         // Load active orders
         async function loadOrders() {
             try {
-                const resp = await fetch('/active_orders');
+                const resp = await fetch('/active_orders', {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
+                if (!resp.ok) throw new Error('Unauthorized');
                 const orders = await resp.json();
                 const tbody = document.getElementById('ordersBody');
                 const empty = document.getElementById('ordersEmpty');
@@ -1558,6 +1721,30 @@ HTML_TEMPLATE = """
                     tbody.appendChild(tr);
                 });
             } catch(e) {}
+        }
+
+        // Load profile
+        async function loadProfile() {
+            try {
+                const resp = await fetch('/profile', {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
+                if (!resp.ok) throw new Error('Unauthorized');
+                const data = await resp.json();
+                document.getElementById('profileUsername').textContent = data.username;
+                document.getElementById('userName').textContent = data.username;
+                document.getElementById('userAvatar').textContent = data.username.charAt(0).toUpperCase();
+                document.getElementById('profileJoined').textContent = new Date(data.created_at).toLocaleDateString();
+                document.getElementById('profileTotalOrders').textContent = data.total_orders;
+                // Get proxy count
+                const p = await fetch('/proxy_count', {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
+                const d = await p.json();
+                document.getElementById('profileProxies').textContent = d.count;
+            } catch(e) {
+                document.getElementById('profileUsername').textContent = 'Error loading profile';
+            }
         }
 
         // Views Form
@@ -1587,7 +1774,10 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch('/send_views', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + getToken()
+                    },
                     body: JSON.stringify({ video, amount })
                 });
                 const data = await response.json();
@@ -1600,7 +1790,9 @@ HTML_TEMPLATE = """
                 viewOrderId = data.order_id;
                 viewStopContainer.style.display = 'block';
                 viewPollInterval = setInterval(async () => {
-                    const statusRes = await fetch(`/status/${viewOrderId}`);
+                    const statusRes = await fetch(`/status/${viewOrderId}`, {
+                        headers: { 'Authorization': 'Bearer ' + getToken() }
+                    });
                     const statusData = await statusRes.json();
                     displayResult(statusData, viewResultContent, viewProgress, viewOrderId);
                     if (['completed','partial','error','cancelled'].includes(statusData.status)) {
@@ -1620,7 +1812,10 @@ HTML_TEMPLATE = """
         viewStopBtn.addEventListener('click', async () => {
             if (!viewOrderId) return;
             try {
-                const response = await fetch(`/stop/${viewOrderId}`, { method: 'POST' });
+                const response = await fetch(`/stop/${viewOrderId}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
                 const data = await response.json();
                 if (data.status === 'ok') {
                     viewStopBtn.disabled = true;
@@ -1658,7 +1853,10 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch('/send_shares', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + getToken()
+                    },
                     body: JSON.stringify({ video, amount })
                 });
                 const data = await response.json();
@@ -1671,7 +1869,9 @@ HTML_TEMPLATE = """
                 shareOrderId = data.order_id;
                 shareStopContainer.style.display = 'block';
                 sharePollInterval = setInterval(async () => {
-                    const statusRes = await fetch(`/status/${shareOrderId}`);
+                    const statusRes = await fetch(`/status/${shareOrderId}`, {
+                        headers: { 'Authorization': 'Bearer ' + getToken() }
+                    });
                     const statusData = await statusRes.json();
                     displayResult(statusData, shareResultContent, shareProgress, shareOrderId);
                     if (['completed','partial','error','cancelled'].includes(statusData.status)) {
@@ -1691,7 +1891,10 @@ HTML_TEMPLATE = """
         shareStopBtn.addEventListener('click', async () => {
             if (!shareOrderId) return;
             try {
-                const response = await fetch(`/stop/${shareOrderId}`, { method: 'POST' });
+                const response = await fetch(`/stop/${shareOrderId}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
                 const data = await response.json();
                 if (data.status === 'ok') {
                     shareStopBtn.disabled = true;
@@ -1717,7 +1920,9 @@ HTML_TEMPLATE = """
             trackBtn.innerHTML = '<i class="fas fa-spinner fa-pulse"></i> Checking...';
             trackResult.classList.remove('show');
             try {
-                const response = await fetch(`/status/${orderId}`);
+                const response = await fetch(`/status/${orderId}`, {
+                    headers: { 'Authorization': 'Bearer ' + getToken() }
+                });
                 if (!response.ok) {
                     if (response.status === 404) alert('Order not found');
                     else alert('Error: ' + response.status);
@@ -1808,8 +2013,11 @@ HTML_TEMPLATE = """
                     localStorage.setItem('username', data.username);
                     document.getElementById('authContainer').style.display = 'none';
                     document.getElementById('mainApp').classList.add('active');
-                    // Reload to fully initialize dashboard
-                    window.location.reload();
+                    updateUserArea();
+                    // Load initial data
+                    updateDashboard();
+                    loadOrders();
+                    loadProfile();
                 } else {
                     setError(loginError, data.detail || 'Login failed');
                 }
@@ -1851,13 +2059,14 @@ HTML_TEMPLATE = """
 
         // Auto-login if token exists
         (function() {
-            const token = localStorage.getItem('token');
+            const token = getToken();
             if (token) {
                 document.getElementById('authContainer').style.display = 'none';
                 document.getElementById('mainApp').classList.add('active');
-                // Load dashboard data
+                updateUserArea();
                 updateDashboard();
                 loadOrders();
+                loadProfile();
             }
         })();
     </script>
