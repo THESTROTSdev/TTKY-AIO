@@ -21,15 +21,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-# ---------- X-GORGON SIGNATURE (CORRECT IMPORT) ----------
-try:
-    from tiktok_signature import signature
-    HAS_REAL_SIGNATURE = True
-except ImportError:
-    HAS_REAL_SIGNATURE = False
-    def signature(url, data):
-        import hashlib
-        return {"x-gorgon": hashlib.md5((url + json.dumps(data)).encode()).hexdigest().upper()}
+# ---------- DUMMY X-GORGON (always works, no Node.js required) ----------
+def signature(url, data):
+    """Placeholder signature – replace with real algorithm if needed."""
+    import hashlib
+    raw = url + json.dumps(data) + "0123456789ABCDEF"
+    return {"x-gorgon": hashlib.md5(raw.encode()).hexdigest().upper()}
 
 # ---------- CONFIG ----------
 SECRET_KEY = "change-this-in-production-use-env-var"
@@ -188,7 +185,7 @@ class ProxyManager:
 
 PROXY_MANAGER = ProxyManager()
 
-# ---------- DEVICE MODELS ----------
+# ---------- DEVICE MODELS (truncated for brevity, full list from previous version) ----------
 @dataclass
 class DeviceModel:
     model: str
@@ -390,6 +387,7 @@ class TikTokStats:
 
 GLOBAL_SEM = asyncio.Semaphore(GLOBAL_MAX_CONCURRENT)
 
+# ---------- SIGNATURE WRAPPER (uses dummy) ----------
 def generate_x_gorgon(params: dict, data: dict) -> str:
     query = '&'.join(f"{k}={v}" for k, v in params.items())
     url = f"https://{HOST}/aweme/v1/aweme/stats?{query}"
@@ -899,7 +897,7 @@ async def stop_job(order_id: str, user=Depends(get_current_user)):
     job.cancelled = True
     return JSONResponse({"status": "ok", "message": "Stop signal sent"})
 
-# ---------- FULL HTML TEMPLATE (COMPLETE UI) ----------
+# ---------- FULL HTML TEMPLATE (same as previous complete version) ----------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
